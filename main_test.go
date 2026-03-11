@@ -13,14 +13,13 @@ func TestSimple(t *testing.T) {
 		qs := r.URL.Query()
 		fmt.Fprintf(w, "hello, %s", qs.Get("name"))
 	}))
-
 	defer ts.Close()
 
-	r, err := checkReflected(ts.URL + "?name=Mr%20Naughty")
+	r, err := getReflectedParams(ts.URL + "?name=Mr%20Naughty")
 	t.Logf("params reflected: %#v", r)
 
 	if err != nil {
-		t.Fatalf("expected nil error from checkReflected(), have %s", err)
+		t.Fatalf("expected nil error from getReflectedParams(), have %s", err)
 	}
 
 	if len(r) != 1 {
@@ -32,11 +31,12 @@ func TestAppend(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		qs := r.URL.Query()
+		// Reflect the value of the parameter so checkAppend can see it
 		fmt.Fprintf(w, "hello, %s", qs.Get("name"))
 	}))
-
 	defer ts.Close()
 
+	// Testing if "somerandomvalue" is reflected when appended to the 'name' param
 	r, err := checkAppend(ts.URL+"?name=Mr%20Naughty", "name", "somerandomvalue")
 
 	if err != nil {
@@ -44,6 +44,6 @@ func TestAppend(t *testing.T) {
 	}
 
 	if !r {
-		t.Errorf("wanted checkAppend() to return true, but it didn't")
+		t.Errorf("wanted checkAppend() to return true (reflection detected), but it didn't")
 	}
 }

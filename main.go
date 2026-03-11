@@ -39,24 +39,30 @@ func main() {
 	sc := bufio.NewScanner(os.Stdin)
 	initialChecks := make(chan paramCheck, 40)
 
-	// Step 1: Find reflected parameters
+	// Step 1: Filter URLs to see which parameters are actually reflected in the response
 	appendChecks := makePool(initialChecks, func(c paramCheck, output chan paramCheck) {
 		reflected, err := getReflectedParams(c.url)
-		if err != nil || len(reflected) == 0 {
+		if err != nil {
 			return
 		}
+
+		if len(reflected) == 0 {
+			return
+		}
+
 		for _, param := range reflected {
 			output <- paramCheck{c.url, param}
 		}
 	})
 
-	// Step 2: Check for unfiltered special characters
+	// Step 2: For each reflected parameter, test the special character set
 	done := makePool(appendChecks, func(c paramCheck, output chan paramCheck) {
 		specialChars := []string{"\"", "'", "<", ">", "$", "|", "(", ")", "`", ":", ";", "{", "}"}
 		var unfiltered []string
 
 		for _, char := range specialChars {
-			wasReflected, err := checkAppend(c.url, c.param, "xx"+char+"yy")
+			// We use a unique prefix/suffix to ensure we aren't seeing a false positive
+			wasReflected, err := checkAppend(c.url, c.param, "kxss"+char+"test")
 			if err == nil && wasReflected {
 				unfiltered = append(unfiltered, char)
 			}
@@ -67,6 +73,7 @@ func main() {
 		}
 	})
 
+	// Read from Stdin
 	for sc.Scan() {
 		initialChecks <- paramCheck{url: sc.Text()}
 	}
@@ -75,6 +82,7 @@ func main() {
 	<-done
 }
 
+// getReflectedParams checks the initial URL to see which query keys appear in the body
 func getReflectedParams(targetURL string) ([]string, error) {
 	out := make([]string, 0)
 
@@ -90,10 +98,12 @@ func getReflectedParams(targetURL string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
+	// Skip redirects
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		return out, nil
 	}
 
+	// Only process HTML responses
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" && !strings.Contains(strings.ToLower(ct), "html") {
 		return out, nil
@@ -114,13 +124,15 @@ func getReflectedParams(targetURL string) ([]string, error) {
 		for _, v := range vv {
 			if v != "" && strings.Contains(body, v) {
 				out = append(out, key)
-				break
+				break 
 			}
 		}
 	}
+
 	return out, nil
 }
 
+// checkAppend appends a specific character/string to a parameter and checks for reflection
 func checkAppend(targetURL, param, suffix string) (bool, error) {
 	u, err := url.Parse(targetURL)
 	if err != nil {
@@ -136,6 +148,7 @@ func checkAppend(targetURL, param, suffix string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	req.Header.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) kxss/1.1")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -143,13 +156,18 @@ func checkAppend(targetURL, param, suffix string) (bool, error) {
 	}
 	defer resp.Body.Close()
 
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+
 	return strings.Contains(string(b), suffix), nil
 }
 
 func makePool(input chan paramCheck, fn func(paramCheck, chan paramCheck)) chan paramCheck {
 	var wg sync.WaitGroup
 	output := make(chan paramCheck)
+
 	for i := 0; i < 40; i++ {
 		wg.Add(1)
 		go func() {
@@ -159,9 +177,11 @@ func makePool(input chan paramCheck, fn func(paramCheck, chan paramCheck)) chan 
 			wg.Done()
 		}()
 	}
+
 	go func() {
 		wg.Wait()
 		close(output)
 	}()
+
 	return output
 }
